@@ -37,6 +37,17 @@ ranges are 1–50, 41–90, 81–130, and so on. Chunk IDs are deterministic SHA
 hashes of their source metadata and content. This phase does not create or use
 embeddings.
 
+Search those chunks with exact keyword overlap:
+
+```bash
+python keyword_search.py "Where is authentication handled?"
+```
+
+The baseline search splits prose and code identifiers into lowercase tokens,
+removes common question words, and scores one point per exact token occurrence.
+It deliberately has no stemming, synonyms, fuzzy matching, or embeddings, so
+its lexical limitations remain visible and measurable.
+
 Run the automated tests with:
 
 ```bash
