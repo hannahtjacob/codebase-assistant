@@ -61,6 +61,23 @@ the question and every chunk, calculate cosine similarity directly with NumPy,
 sort the scores, and return the top five. Everything stays in memory; no vector
 database or ChromaDB is used.
 
+Persist those embeddings in ChromaDB so they do not need to be recomputed on
+every search:
+
+```bash
+python vector_store.py index requests --repo data/repos/requests
+python vector_store.py search requests "Where are user credentials checked?"
+```
+
+The `index` command stores each chunk's embedding and content along with its
+chunk ID, file path, line range, language, and repository ID. The `search`
+command embeds only the question, filters the collection by repository ID, and
+asks Chroma for the five nearest vectors. Data persists under `data/chroma/`.
+
+SQLite remains the right tool for exact structured lookups such as
+`SELECT * FROM repositories WHERE id = ?`. ChromaDB serves a different need:
+similarity search across high-dimensional embedding vectors.
+
 Run the automated tests with:
 
 ```bash
