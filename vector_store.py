@@ -22,6 +22,17 @@ DEFAULT_CHROMA_PATH = "data/chroma"
 DEFAULT_COLLECTION = "code_chunks"
 
 
+def deterministic_chunk_id(repository_id: str, chunk: CodeChunk) -> str:
+    """Return the stable Chroma ID for a chunk in a repository.
+
+    ``CodeChunk.id`` is already a SHA-256 digest of its path, language, line
+    range, and content. Hashing it with the repository ID makes the persisted
+    ID stable across re-indexes and unique across repositories.
+    """
+    identity = f"{repository_id}\0{chunk.id}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class VectorSearchResult:
     """A persisted code chunk and its cosine similarity to a question."""
@@ -53,12 +64,6 @@ class ChromaCodeSearch:
             configuration={"hnsw": {"space": "cosine"}},
         )
 
-    @staticmethod
-    def _record_id(repository_id: str, chunk_id: str) -> str:
-        """Create a Chroma ID unique across all indexed repositories."""
-        identity = f"{repository_id}\0{chunk_id}"
-        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
-
     def index_chunks(
         self, chunks: Sequence[CodeChunk], repository_id: str
     ) -> int:
@@ -70,7 +75,7 @@ class ChromaCodeSearch:
 
         embeddings = embed_texts([chunk.content for chunk in chunks], self.model)
         self.collection.upsert(
-            ids=[self._record_id(repository_id, chunk.id) for chunk in chunks],
+            ids=[deterministic_chunk_id(repository_id, chunk) for chunk in chunks],
             embeddings=embeddings.tolist(),
             documents=[chunk.content for chunk in chunks],
             metadatas=[

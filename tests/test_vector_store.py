@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from chunker import CodeChunk
-from vector_store import ChromaCodeSearch
+from vector_store import ChromaCodeSearch, deterministic_chunk_id
 
 
 class FakeEmbeddingModel:
@@ -95,6 +95,18 @@ class ChromaCodeSearchTests(unittest.TestCase):
         second_id = self.client.collection.upsert_call["ids"][0]
 
         self.assertNotEqual(first_id, second_id)
+
+    def test_record_id_is_deterministic_across_reindexing(self):
+        chunk = make_chunk()
+
+        self.store.index_chunks([chunk], "requests")
+        first_id = self.client.collection.upsert_call["ids"][0]
+        self.store.index_chunks([chunk], "requests")
+        second_id = self.client.collection.upsert_call["ids"][0]
+
+        self.assertEqual(first_id, second_id)
+        self.assertEqual(first_id, deterministic_chunk_id("requests", chunk))
+        self.assertEqual(len(first_id), 64)
 
     def test_search_filters_repository_and_rebuilds_chunk(self):
         results = self.store.search("requests", "password check")

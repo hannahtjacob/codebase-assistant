@@ -74,6 +74,11 @@ chunk ID, file path, line range, language, and repository ID. The `search`
 command embeds only the question, filters the collection by repository ID, and
 asks Chroma for the five nearest vectors. Data persists under `data/chroma/`.
 
+Both ID layers are deterministic SHA-256 hashes. A `CodeChunk` ID incorporates
+its file path, language, line range, and content; its Chroma record ID also
+incorporates the repository ID. Re-indexing an unchanged repository therefore
+upserts the same records instead of creating duplicates.
+
 SQLite remains the right tool for exact structured lookups such as
 `SELECT * FROM repositories WHERE id = ?`. ChromaDB serves a different need:
 similarity search across high-dimensional embedding vectors.
