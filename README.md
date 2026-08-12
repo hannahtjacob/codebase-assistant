@@ -48,6 +48,19 @@ removes common question words, and scores one point per exact token occurrence.
 It deliberately has no stemming, synonyms, fuzzy matching, or embeddings, so
 its lexical limitations remain visible and measurable.
 
+Search chunks semantically with Sentence Transformers and NumPy:
+
+```bash
+python semantic_search.py --experiment
+python semantic_search.py "Where are user credentials checked?"
+```
+
+The experiment embeds three short sentences and compares them with a password
+question. Semantic search uses the same process for `CodeChunk.content`: embed
+the question and every chunk, calculate cosine similarity directly with NumPy,
+sort the scores, and return the top five. Everything stays in memory; no vector
+database or ChromaDB is used.
+
 Run the automated tests with:
 
 ```bash
