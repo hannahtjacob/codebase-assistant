@@ -21,6 +21,9 @@ class FakeCollection:
     def __init__(self):
         self.upsert_call = None
         self.query_call = None
+        self.existing_ids = []
+        self.get_call = None
+        self.delete_call = None
 
     def upsert(self, **kwargs):
         self.upsert_call = kwargs
@@ -39,6 +42,13 @@ class FakeCollection:
             }]],
             "distances": [[0.125]],
         }
+
+    def get(self, **kwargs):
+        self.get_call = kwargs
+        return {"ids": self.existing_ids}
+
+    def delete(self, **kwargs):
+        self.delete_call = kwargs
 
 
 class FakeClient:
@@ -95,6 +105,21 @@ class ChromaCodeSearchTests(unittest.TestCase):
         second_id = self.client.collection.upsert_call["ids"][0]
 
         self.assertNotEqual(first_id, second_id)
+
+    def test_index_removes_stale_chunks_for_the_same_repository(self):
+        current_id = deterministic_chunk_id("requests", make_chunk())
+        self.client.collection.existing_ids = [current_id, "old-window-id"]
+
+        self.store.index_chunks([make_chunk()], "requests")
+
+        self.assertEqual(self.client.collection.get_call, {
+            "where": {"repository_id": "requests"},
+            "include": [],
+        })
+        self.assertEqual(
+            self.client.collection.delete_call,
+            {"ids": ["old-window-id"]},
+        )
 
     def test_record_id_is_deterministic_across_reindexing(self):
         chunk = make_chunk()

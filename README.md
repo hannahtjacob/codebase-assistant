@@ -32,10 +32,20 @@ source_files = scan_repository("data/repos/requests")
 chunks = chunk_file(source_files[0], chunk_size=50, overlap=10)
 ```
 
-Chunks use inclusive, 1-based line numbers. With the default settings, their
-ranges are 1–50, 41–90, 81–130, and so on. Chunk IDs are deterministic SHA-256
-hashes of their source metadata and content. This phase does not create or use
-embeddings.
+Chunks use inclusive, 1-based line numbers. Python files are parsed with the
+standard-library `ast` module: each top-level function, async function, and
+class becomes a complete chunk with `symbol_name` and `symbol_type` metadata.
+Files without definitions become a module chunk, and invalid Python safely
+falls back to line windows. Other languages still use ranges 1–50, 41–90,
+81–130, and so on. Chunk IDs are deterministic SHA-256 hashes.
+
+Inspect the AST of a tiny program interactively:
+
+```python
+from chunker import inspect_python_ast
+
+print(inspect_python_ast("def login():\n    return client.auth.check()\n"))
+```
 
 Search those chunks with exact keyword overlap:
 
@@ -77,7 +87,9 @@ asks Chroma for the five nearest vectors. Data persists under `data/chroma/`.
 Both ID layers are deterministic SHA-256 hashes. A `CodeChunk` ID incorporates
 its file path, language, line range, and content; its Chroma record ID also
 incorporates the repository ID. Re-indexing an unchanged repository therefore
-upserts the same records instead of creating duplicates.
+upserts the same records instead of creating duplicates. Re-indexing also
+removes IDs that no longer occur, such as obsolete line-window chunks after
+switching to AST boundaries.
 
 SQLite remains the right tool for exact structured lookups such as
 `SELECT * FROM repositories WHERE id = ?`. ChromaDB serves a different need:

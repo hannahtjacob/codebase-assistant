@@ -74,21 +74,38 @@ class ChromaCodeSearch:
             return 0
 
         embeddings = embed_texts([chunk.content for chunk in chunks], self.model)
+        record_ids = [
+            deterministic_chunk_id(repository_id, chunk) for chunk in chunks
+        ]
+        metadatas = []
+        for chunk in chunks:
+            metadata = {
+                "chunk_id": chunk.id,
+                "file_path": chunk.file_path,
+                "language": chunk.language,
+                "start_line": chunk.start_line,
+                "end_line": chunk.end_line,
+                "repository_id": repository_id,
+            }
+            if chunk.symbol_name is not None:
+                metadata["symbol_name"] = chunk.symbol_name
+            if chunk.symbol_type is not None:
+                metadata["symbol_type"] = chunk.symbol_type
+            metadatas.append(metadata)
+
+        existing = self.collection.get(
+            where={"repository_id": repository_id},
+            include=[],
+        )
+        stale_ids = sorted(set(existing.get("ids") or []) - set(record_ids))
+        if stale_ids:
+            self.collection.delete(ids=stale_ids)
+
         self.collection.upsert(
-            ids=[deterministic_chunk_id(repository_id, chunk) for chunk in chunks],
+            ids=record_ids,
             embeddings=embeddings.tolist(),
             documents=[chunk.content for chunk in chunks],
-            metadatas=[
-                {
-                    "chunk_id": chunk.id,
-                    "file_path": chunk.file_path,
-                    "language": chunk.language,
-                    "start_line": chunk.start_line,
-                    "end_line": chunk.end_line,
-                    "repository_id": repository_id,
-                }
-                for chunk in chunks
-            ],
+            metadatas=metadatas,
         )
         return len(chunks)
 
@@ -127,6 +144,8 @@ class ChromaCodeSearch:
                 start_line=int(metadata["start_line"]),
                 end_line=int(metadata["end_line"]),
                 content=document,
+                symbol_name=metadata.get("symbol_name"),
+                symbol_type=metadata.get("symbol_type"),
             )
             results.append(
                 VectorSearchResult(
