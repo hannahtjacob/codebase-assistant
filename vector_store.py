@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from chunker import CodeChunk, chunk_file
+from metadata_store import DEFAULT_DATABASE_PATH, MetadataStore
 from scan_repository import scan_repository
 from semantic_search import (
     DEFAULT_MODEL,
@@ -50,6 +51,7 @@ class ChromaCodeSearch:
         persist_path: str | Path = DEFAULT_CHROMA_PATH,
         model: EmbeddingModel | None = None,
         collection_name: str = DEFAULT_COLLECTION,
+        metadata_store: MetadataStore | None = None,
         client: Any | None = None,
     ) -> None:
         if client is None:
@@ -58,6 +60,7 @@ class ChromaCodeSearch:
             client = chromadb.PersistentClient(path=str(persist_path))
 
         self.model = model or load_model()
+        self.metadata_store = metadata_store or MetadataStore()
         self.collection = client.get_or_create_collection(
             name=collection_name,
             embedding_function=None,
@@ -65,7 +68,13 @@ class ChromaCodeSearch:
         )
 
     def index_chunks(
-        self, chunks: Sequence[CodeChunk], repository_id: str
+        self,
+        chunks: Sequence[CodeChunk],
+        repository_id: str,
+        *,
+        repository_url: str = "",
+        repository_name: str | None = None,
+        commit_hash: str = "unknown",
     ) -> int:
         """Embed and persist chunks for one repository, updating existing IDs."""
         if not repository_id.strip():
@@ -77,35 +86,34 @@ class ChromaCodeSearch:
         record_ids = [
             deterministic_chunk_id(repository_id, chunk) for chunk in chunks
         ]
-        metadatas = []
-        for chunk in chunks:
-            metadata = {
-                "chunk_id": chunk.id,
-                "file_path": chunk.file_path,
-                "language": chunk.language,
-                "start_line": chunk.start_line,
-                "end_line": chunk.end_line,
-                "repository_id": repository_id,
-            }
-            if chunk.symbol_name is not None:
-                metadata["symbol_name"] = chunk.symbol_name
-            if chunk.symbol_type is not None:
-                metadata["symbol_type"] = chunk.symbol_type
-            metadatas.append(metadata)
-
         existing = self.collection.get(
             where={"repository_id": repository_id},
-            include=[],
+            include=["documents"],
         )
-        stale_ids = sorted(set(existing.get("ids") or []) - set(record_ids))
-        if stale_ids:
-            self.collection.delete(ids=stale_ids)
+        existing_ids = existing.get("ids") or []
+        existing_documents = existing.get("documents") or []
+        stale_ids = set(existing_ids) - set(record_ids)
+        legacy_document_ids = {
+            record_id
+            for record_id, document in zip(existing_ids, existing_documents)
+            if document is not None
+        }
+        ids_to_delete = sorted(stale_ids | legacy_document_ids)
+        if ids_to_delete:
+            self.collection.delete(ids=ids_to_delete)
 
         self.collection.upsert(
             ids=record_ids,
             embeddings=embeddings.tolist(),
-            documents=[chunk.content for chunk in chunks],
-            metadatas=metadatas,
+            metadatas=[{"repository_id": repository_id} for _ in chunks],
+        )
+        self.metadata_store.save_index(
+            repository_id=repository_id,
+            url=repository_url,
+            name=repository_name or repository_id,
+            commit_hash=commit_hash,
+            chunks=chunks,
+            record_ids=record_ids,
         )
         return len(chunks)
 
@@ -125,36 +133,26 @@ class ChromaCodeSearch:
             query_embeddings=[query_embedding.tolist()],
             where={"repository_id": repository_id},
             n_results=top_k,
-            include=["documents", "metadatas", "distances"],
+            include=["distances"],
         )
 
-        documents = response.get("documents") or [[]]
-        metadatas = response.get("metadatas") or [[]]
+        ids = response.get("ids") or [[]]
         distances = response.get("distances") or [[]]
+        chunks_by_id = self.metadata_store.get_chunks(ids[0])
         results: list[VectorSearchResult] = []
-        for document, metadata, distance in zip(
-            documents[0], metadatas[0], distances[0]
-        ):
-            if document is None or metadata is None or distance is None:
+        for record_id, distance in zip(ids[0], distances[0]):
+            chunk = chunks_by_id.get(record_id)
+            if chunk is None or distance is None:
                 continue
-            chunk = CodeChunk(
-                id=str(metadata["chunk_id"]),
-                file_path=str(metadata["file_path"]),
-                language=str(metadata["language"]),
-                start_line=int(metadata["start_line"]),
-                end_line=int(metadata["end_line"]),
-                content=document,
-                symbol_name=metadata.get("symbol_name"),
-                symbol_type=metadata.get("symbol_type"),
-            )
             results.append(
                 VectorSearchResult(
                     chunk=chunk,
-                    repository_id=str(metadata["repository_id"]),
+                    repository_id=repository_id,
                     # A cosine distance of 0 means identical direction.
                     score=1.0 - float(distance),
                 )
             )
+        self.metadata_store.record_query(repository_id, question, top_k)
         return results
 
 
@@ -162,6 +160,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chroma-path", default=DEFAULT_CHROMA_PATH)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--database", default=DEFAULT_DATABASE_PATH)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     index_parser = subparsers.add_parser("index", help="embed and store a repository")
@@ -177,6 +176,7 @@ def main() -> None:
     store = ChromaCodeSearch(
         persist_path=args.chroma_path,
         model=load_model(args.model),
+        metadata_store=MetadataStore(args.database),
     )
     if args.command == "index":
         chunks = [
@@ -184,7 +184,18 @@ def main() -> None:
             for source_file in scan_repository(args.repo)
             for chunk in chunk_file(source_file)
         ]
-        count = store.index_chunks(chunks, args.repository_id)
+        from git import Repo
+
+        repository = Repo(args.repo)
+        remotes = list(repository.remotes)
+        repository_url = remotes[0].url if remotes else str(Path(args.repo).resolve())
+        count = store.index_chunks(
+            chunks,
+            args.repository_id,
+            repository_url=repository_url,
+            repository_name=Path(args.repo).name,
+            commit_hash=repository.head.commit.hexsha,
+        )
         print(f"Indexed {count} chunks for repository {args.repository_id!r}")
         return
 

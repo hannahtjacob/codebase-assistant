@@ -22,6 +22,7 @@ class FakeCollection:
         self.upsert_call = None
         self.query_call = None
         self.existing_ids = []
+        self.existing_documents = []
         self.get_call = None
         self.delete_call = None
 
@@ -31,21 +32,16 @@ class FakeCollection:
     def query(self, **kwargs):
         self.query_call = kwargs
         return {
-            "documents": [["authenticate credentials"]],
-            "metadatas": [[{
-                "chunk_id": "auth-id",
-                "file_path": "src/auth.py",
-                "language": "Python",
-                "start_line": 10,
-                "end_line": 20,
-                "repository_id": "requests",
-            }]],
+            "ids": [[deterministic_chunk_id("requests", make_chunk())]],
             "distances": [[0.125]],
         }
 
     def get(self, **kwargs):
         self.get_call = kwargs
-        return {"ids": self.existing_ids}
+        return {
+            "ids": self.existing_ids,
+            "documents": self.existing_documents,
+        }
 
     def delete(self, **kwargs):
         self.delete_call = kwargs
@@ -61,6 +57,21 @@ class FakeClient:
         return self.collection
 
 
+class FakeMetadataStore:
+    def __init__(self):
+        self.save_call = None
+        self.query_call = None
+
+    def save_index(self, **kwargs):
+        self.save_call = kwargs
+
+    def get_chunks(self, record_ids):
+        return {record_ids[0]: make_chunk(chunk_id=record_ids[0])} if record_ids else {}
+
+    def record_query(self, repository_id, question, top_k):
+        self.query_call = (repository_id, question, top_k)
+
+
 def make_chunk(chunk_id="auth-id", content="authenticate credentials"):
     return CodeChunk(chunk_id, "src/auth.py", "Python", 10, 20, content)
 
@@ -68,7 +79,12 @@ def make_chunk(chunk_id="auth-id", content="authenticate credentials"):
 class ChromaCodeSearchTests(unittest.TestCase):
     def setUp(self):
         self.client = FakeClient()
-        self.store = ChromaCodeSearch(client=self.client, model=FakeEmbeddingModel())
+        self.metadata = FakeMetadataStore()
+        self.store = ChromaCodeSearch(
+            client=self.client,
+            model=FakeEmbeddingModel(),
+            metadata_store=self.metadata,
+        )
 
     def test_creates_a_cosine_collection_without_a_chroma_embedder(self):
         self.assertEqual(
@@ -80,22 +96,17 @@ class ChromaCodeSearchTests(unittest.TestCase):
             },
         )
 
-    def test_index_chunks_stores_embeddings_documents_and_metadata(self):
+    def test_index_splits_vectors_from_structured_metadata(self):
         count = self.store.index_chunks([make_chunk()], "requests")
 
         call = self.client.collection.upsert_call
         self.assertEqual(count, 1)
-        self.assertEqual(call["documents"], ["authenticate credentials"])
+        self.assertNotIn("documents", call)
         self.assertEqual(call["embeddings"], [[0.8999999761581421, 0.10000000149011612]])
-        self.assertEqual(call["metadatas"][0], {
-            "chunk_id": "auth-id",
-            "file_path": "src/auth.py",
-            "language": "Python",
-            "start_line": 10,
-            "end_line": 20,
-            "repository_id": "requests",
-        })
+        self.assertEqual(call["metadatas"], [{"repository_id": "requests"}])
         self.assertEqual(len(call["ids"]), 1)
+        self.assertEqual(self.metadata.save_call["chunks"], [make_chunk()])
+        self.assertEqual(self.metadata.save_call["record_ids"], call["ids"])
 
     def test_repository_is_part_of_record_id(self):
         chunk = make_chunk()
@@ -114,11 +125,23 @@ class ChromaCodeSearchTests(unittest.TestCase):
 
         self.assertEqual(self.client.collection.get_call, {
             "where": {"repository_id": "requests"},
-            "include": [],
+            "include": ["documents"],
         })
         self.assertEqual(
             self.client.collection.delete_call,
             {"ids": ["old-window-id"]},
+        )
+
+    def test_index_removes_legacy_documents_from_chroma(self):
+        current_id = deterministic_chunk_id("requests", make_chunk())
+        self.client.collection.existing_ids = [current_id]
+        self.client.collection.existing_documents = ["duplicated content"]
+
+        self.store.index_chunks([make_chunk()], "requests")
+
+        self.assertEqual(
+            self.client.collection.delete_call,
+            {"ids": [current_id]},
         )
 
     def test_record_id_is_deterministic_across_reindexing(self):
@@ -140,11 +163,15 @@ class ChromaCodeSearchTests(unittest.TestCase):
             "query_embeddings": [[1.0, 0.0]],
             "where": {"repository_id": "requests"},
             "n_results": 5,
-            "include": ["documents", "metadatas", "distances"],
+            "include": ["distances"],
         })
-        self.assertEqual(results[0].chunk, make_chunk())
+        self.assertEqual(results[0].chunk.file_path, make_chunk().file_path)
         self.assertEqual(results[0].repository_id, "requests")
         self.assertAlmostEqual(results[0].score, 0.875)
+        self.assertEqual(
+            self.metadata.query_call,
+            ("requests", "password check", 5),
+        )
 
     def test_validates_repository_and_limits(self):
         with self.assertRaises(ValueError):

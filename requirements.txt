@@ -2,3 +2,4 @@ GitPython>=3.1,<4
 chromadb>=1.1,<2
 numpy>=1.26,<3
 sentence-transformers>=3,<6
+SQLAlchemy>=2,<3

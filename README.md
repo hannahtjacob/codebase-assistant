@@ -95,6 +95,25 @@ SQLite remains the right tool for exact structured lookups such as
 `SELECT * FROM repositories WHERE id = ?`. ChromaDB serves a different need:
 similarity search across high-dimensional embedding vectors.
 
+Structured metadata lives in `data/metadata.db`. The schema is deliberately
+defined first as plain SQL in `schema.sql`; `metadata_store.py` then maps those
+same tables with SQLAlchemy. Inspect it with SQLite directly:
+
+```bash
+sqlite3 data/metadata.db ".schema"
+sqlite3 data/metadata.db \
+  "SELECT id, name, commit_hash, indexed_at FROM repositories;"
+sqlite3 data/metadata.db \
+  "SELECT file_path, symbol_name, start_line, end_line FROM chunks LIMIT 10;"
+sqlite3 data/metadata.db \
+  "SELECT question, searched_at FROM query_history ORDER BY id DESC LIMIT 10;"
+```
+
+SQLite is the source of truth for repository metadata, chunk metadata/content,
+content hashes, and query history. Chroma stores embedding vectors plus only
+the repository ID required to filter similarity searches. Search returns IDs
+from Chroma and resolves the corresponding structured records from SQLite.
+
 Run the automated tests with:
 
 ```bash
