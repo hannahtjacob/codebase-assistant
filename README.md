@@ -125,6 +125,26 @@ embeds the question, asks Chroma for ranked IDs, resolves those IDs to complete
 `CodeChunk` records in SQLite, and returns the chunks in similarity order. No
 LLM is called anywhere in this pipeline.
 
+Generate a grounded answer with a locally running Ollama model:
+
+```bash
+ollama pull qwen2.5-coder:1.5b
+ollama serve
+python answer.py
+```
+
+Answer generation defaults to the top-ranked chunk to keep local models
+focused. Use `--top-k` to tune the context size for broader questions.
+
+This is the complete RAG flow: `Retriever` supplies relevant chunks, the app
+builds an augmented prompt containing only those sources, and an
+`LLMProvider` generates the answer. The prompt requires exact citations such
+as `` `src/requests/auth.py:35-58` `` and instructs the model to admit when the
+retrieved code is insufficient. `OllamaProvider` is the default local provider;
+other providers can replace it by implementing `generate(prompt: str) -> str`.
+Generated text must contain an exact retrieved citation; otherwise the service
+retries once and then returns only a safe list of relevant sources.
+
 Run the automated tests with:
 
 ```bash
