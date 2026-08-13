@@ -114,6 +114,17 @@ content hashes, and query history. Chroma stores embedding vectors plus only
 the repository ID required to filter similarity searches. Search returns IDs
 from Chroma and resolves the corresponding structured records from SQLite.
 
+Run the complete retrieval pipeline through the interactive CLI:
+
+```bash
+python search.py
+```
+
+Enter an indexed repository ID and a natural-language question. `Retriever`
+embeds the question, asks Chroma for ranked IDs, resolves those IDs to complete
+`CodeChunk` records in SQLite, and returns the chunks in similarity order. No
+LLM is called anywhere in this pipeline.
+
 Run the automated tests with:
 
 ```bash

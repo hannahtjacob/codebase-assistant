@@ -31,10 +31,13 @@ class SemanticSearchResult:
 
 
 def load_model(model_name: str = DEFAULT_MODEL) -> EmbeddingModel:
-    """Load a Sentence Transformer, downloading it on first use if needed."""
+    """Load a cached Sentence Transformer, downloading it on first use."""
     from sentence_transformers import SentenceTransformer
 
-    return SentenceTransformer(model_name)
+    try:
+        return SentenceTransformer(model_name, local_files_only=True)
+    except OSError:
+        return SentenceTransformer(model_name)
 
 
 def embed_texts(
